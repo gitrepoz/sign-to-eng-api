@@ -1,0 +1,7 @@
+tensorflow==2.13.0
+mediapipe==0.10.9
+opencv-python==4.8.1.78
+numpy==1.24.3
+websockets==15.0.1
+protobuf==3.20.3
+absl-py==2.3.1

@@ -1,0 +1,13 @@
+# .dockerignore
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.swp
+.env
+.git
+.gitignore
+.vscode
+.DS_Store
+# If you plan to mount the model as a volume, uncomment next line:
+# model/
