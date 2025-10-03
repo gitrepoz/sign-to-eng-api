@@ -7,30 +7,44 @@ import json
 import tensorflow as tf
 import mediapipe as mp
 import os
+from tensorflow.keras import layers, regularizers
 
 # ==== labels ====
-actions = np.array(['hello', 'world', 'love', 'airplane', 'wrong'])
+actions = np.array(['hello', 'call', 'sorry', 'bye', 'love'])
 threshold = 0.4
 
 # === Model  ===
-MODEL_WEIGHTS = os.getenv("MODEL_WEIGHTS", "/app/model/action_test_5.h5")
+MODEL_WEIGHTS = r'D:\SL_Frontend\NewSL\sign-to-eng-api\model\updated15words.h5'
 
-model = tf.keras.Sequential([
-    tf.keras.layers.Input(shape=(30, 1662)),
-    tf.keras.layers.LSTM(128, return_sequences=True, activation='tanh'),
-    tf.keras.layers.Dropout(0.3),
-    tf.keras.layers.BatchNormalization(),
-    tf.keras.layers.LSTM(256, return_sequences=True, activation='tanh'),
-    tf.keras.layers.Dropout(0.3),
-    tf.keras.layers.BatchNormalization(),
-    tf.keras.layers.LSTM(128, return_sequences=False, activation='tanh'),
-    tf.keras.layers.Dropout(0.3),
-    tf.keras.layers.BatchNormalization(),
-    tf.keras.layers.Dense(128, activation='relu'),
-    tf.keras.layers.Dropout(0.3),
-    tf.keras.layers.Dense(64, activation='relu'),
-    tf.keras.layers.Dense(len(actions), activation='softmax')
-])
+num_classes = actions.shape[0]
+
+# ================== Model ==================
+inp = tf.keras.layers.Input(shape=(45, 1662))
+x = tf.keras.layers.Masking(mask_value=0.0)(inp)
+x = tf.keras.layers.LayerNormalization()(x)
+
+x = tf.keras.layers.Bidirectional(
+    tf.keras.layers.LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)
+)(x)
+x = tf.keras.layers.LayerNormalization()(x)
+
+x = tf.keras.layers.Bidirectional(
+    tf.keras.layers.LSTM(128, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)
+)(x)
+
+avg_pool = tf.keras.layers.GlobalAveragePooling1D()(x)
+max_pool = tf.keras.layers.GlobalMaxPooling1D()(x)
+x = tf.keras.layers.Concatenate()([avg_pool, max_pool])
+
+x = tf.keras.layers.Dropout(0.4)(x)
+x = tf.keras.layers.Dense(256, activation="relu", kernel_regularizer=regularizers.l2(1e-5))(x)
+x = tf.keras.layers.LayerNormalization()(x)
+x = tf.keras.layers.Dropout(0.3)(x)
+x = tf.keras.layers.Dense(128, activation="relu")(x)
+
+out = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
+model = tf.keras.Model(inp, out)
+
 
 model.load_weights(MODEL_WEIGHTS)
 
