@@ -14,7 +14,7 @@ actions = np.array(['hello', 'call', 'sorry', 'bye', 'love'])
 threshold = 0.4
 
 # === Model  ===
-MODEL_WEIGHTS = r'D:\SL_Frontend\NewSL\sign-to-eng-api\model\updated15words.h5'
+MODEL_WEIGHTS = os.getenv("MODEL_WEIGHTS", "/app/model/updated15words.h5")
 
 num_classes = actions.shape[0]
 
