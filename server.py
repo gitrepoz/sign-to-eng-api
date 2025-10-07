@@ -15,7 +15,6 @@ threshold = 0.4
 
 # === Model  ===
 MODEL_WEIGHTS = os.getenv("MODEL_WEIGHTS", "/app/model/updated15words.h5")
-
 num_classes = actions.shape[0]
 
 # ================== Model ==================
@@ -45,19 +44,23 @@ x = tf.keras.layers.Dense(128, activation="relu")(x)
 out = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
 model = tf.keras.Model(inp, out)
 
-
 model.load_weights(MODEL_WEIGHTS)
 
 mp_holistic = mp.solutions.holistic
 sequence = []
 sentence = []
 
+# -------- key change: ensure float32 ----------
 def extract_keypoints(results):
-    pose = np.array([[res.x, res.y, res.z, res.visibility] for res in results.pose_landmarks.landmark]).flatten() if results.pose_landmarks else np.zeros(33*4)
-    face = np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark]).flatten() if results.face_landmarks else np.zeros(468*3)
-    lh = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21*3)
-    rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21*3)
-    return np.concatenate([pose, face, lh, rh])
+    pose = (np.array([[res.x, res.y, res.z, res.visibility] for res in results.pose_landmarks.landmark], dtype=np.float32).flatten()
+            if results.pose_landmarks else np.zeros(33*4, dtype=np.float32))
+    face = (np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark], dtype=np.float32).flatten()
+            if results.face_landmarks else np.zeros(468*3, dtype=np.float32))
+    lh = (np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark], dtype=np.float32).flatten()
+          if results.left_hand_landmarks else np.zeros(21*3, dtype=np.float32))
+    rh = (np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark], dtype=np.float32).flatten()
+          if results.right_hand_landmarks else np.zeros(21*3, dtype=np.float32))
+    return np.concatenate([pose, face, lh, rh]).astype(np.float32)
 
 def mediapipe_detection(image, model_):
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -67,44 +70,65 @@ def mediapipe_detection(image, model_):
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     return image, results
 
+# -------- key changes: use 45-frame window ----------
+FRAMES_NEEDED = 45
+
 async def process_frame(websocket):
     global sequence, sentence
     holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
     try:
         async for message in websocket:
-            data = json.loads(message)
-            img_data = base64.b64decode(data['frame'])
-            nparr = np.frombuffer(img_data, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            try:
+                data = json.loads(message)
+                img_b64 = data.get('frame', '')
+                if not img_b64:
+                    await websocket.send(json.dumps({'translation': ''}))
+                    continue
+                img_data = base64.b64decode(img_b64)
+                nparr = np.frombuffer(img_data, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if frame is None:
+                    await websocket.send(json.dumps({'translation': ''}))
+                    continue
+            except Exception:
+                # Malformed payload; keep the connection alive but send empty output
+                await websocket.send(json.dumps({'translation': ''}))
+                continue
 
             _, results = mediapipe_detection(frame, holistic)
             keypoints = extract_keypoints(results)
             sequence.append(keypoints)
-            sequence = sequence[-30:]
+            sequence = sequence[-FRAMES_NEEDED:]  # keep last 45
 
             output = ""
-            if len(sequence) == 30:
-                res = model.predict(np.expand_dims(sequence, axis=0), verbose=0)[0]
-                prediction = actions[np.argmax(res)]
-                if res[np.argmax(res)] > threshold:
-                    if len(sentence) > 0:
-                        if prediction != sentence[-1]:
-                            sentence.append(prediction)
-                    else:
-                        sentence.append(prediction)
-                    if len(sentence) > 5:
-                        sentence = sentence[-5:]
+            if len(sequence) >= FRAMES_NEEDED:
+                try:
+                    window = np.expand_dims(sequence[-FRAMES_NEEDED:], axis=0)  # shape (1,45,1662)
+                    res = model.predict(window, verbose=0)[0]
+                    pred_idx = int(np.argmax(res))
+                    pred = actions[pred_idx]
+                    conf = float(res[pred_idx])
+                except Exception:
+                    # Any unexpected model error -> send empty to avoid breaking stream
+                    pred, conf = "", 0.0
+
+                if conf > threshold and pred:
+                    if len(sentence) == 0 or pred != sentence[-1]:
+                        sentence.append(pred)
+                        if len(sentence) > 5:
+                            sentence = sentence[-5:]
                     output = " ".join(sentence)
                 else:
+                    # no confident update; keep output empty
                     output = ""
-            else:
-                output = ""
 
             await websocket.send(json.dumps({'translation': output}))
     finally:
         holistic.close()
 
 async def main():
+    # You can tweak ping/pong if clients are on flaky networks:
+    # async with websockets.serve(process_frame, "0.0.0.0", 8765, ping_interval=20, ping_timeout=20, max_size=8*1024*1024):
     async with websockets.serve(process_frame, "0.0.0.0", 8765):
         print("Sign language translation server started on ws://0.0.0.0:8765")
         await asyncio.Future()
