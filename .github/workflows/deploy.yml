@@ -17,6 +17,9 @@ jobs:
         host: ${{ secrets.EC2_HOST }}
         username: ${{ secrets.EC2_USERNAME }}
         key: ${{ secrets.EC2_SSH_KEY }}
+        port: 22
+        timeout: 60s
+        command_timeout: 10m
         script: |
           # Navigate to the project directory
           cd /home/ubuntu/sign-to-eng-api
