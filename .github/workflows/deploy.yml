@@ -1,0 +1,55 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Deploy to EC2
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          # Navigate to the project directory
+          cd /home/ubuntu/sign-to-eng-api
+          
+          # Pull the latest changes from main branch
+          echo "Pulling latest changes from main branch..."
+          git pull origin main
+          
+          # Stop and remove the current container if it exists
+          echo "Stopping and removing current container..."
+          docker stop sign-api-container || true
+          docker rm sign-api-container || true
+          
+          # Remove existing images to free up space
+          echo "Removing existing images..."
+          docker rmi $(docker images -q sign-api) || true
+          docker system prune -f
+          
+          # Build new Docker image
+          echo "Building new Docker image..."
+          docker build -t sign-api .
+          
+          # Run the new container
+          echo "Starting new container..."
+          docker run -d \
+            --name sign-api-container \
+            --restart unless-stopped \
+            -p 8765:8765 \
+            sign-api
+          
+          # Verify the container is running
+          echo "Verifying deployment..."
+          sleep 10
+          docker ps | grep sign-api-container
+          
+          echo "Deployment completed successfully!"
