@@ -6,131 +6,138 @@ import base64
 import json
 import tensorflow as tf
 import mediapipe as mp
+from collections import deque
+import time
+from tensorflow.keras import layers, models, regularizers 
 import os
-from tensorflow.keras import layers, regularizers
 
-# ==== labels ====
-actions = np.array(['hello', 'call', 'sorry', 'bye', 'love'])
-threshold = 0.4
+# ==================== MODEL & ACTION SETUP ====================
+actions = np.array(['beautiful', 'bye', 'call', 'love', 'hello'])
+MODEL_WEIGHTS = os.getenv("MODEL_WEIGHTS", "/app/model/model_30.h5")
+num_classes = len(actions)
+threshold = 0.2
 
-# === Model  ===
-MODEL_WEIGHTS = os.getenv("MODEL_WEIGHTS", "/app/model/updated15words.h5")
-num_classes = actions.shape[0]
+def build_model(timesteps=30, features=1662, classes=num_classes):
+    inp = layers.Input(shape=(timesteps, features))
+    x = layers.Masking(mask_value=0.0)(inp)
+    x = layers.LayerNormalization()(x)
+    x = layers.Bidirectional(layers.LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2))(x)
+    x = layers.LayerNormalization()(x)
+    x = layers.Bidirectional(layers.LSTM(128, return_sequences=True, dropout=0.2, recurrent_dropout=0.2))(x)
+    avg_pool = layers.GlobalAveragePooling1D()(x)
+    max_pool = layers.GlobalMaxPooling1D()(x)
+    x = layers.Concatenate()([avg_pool, max_pool])
+    x = layers.Dropout(0.4)(x)
+    x = layers.Dense(256, activation="relu", kernel_regularizer=regularizers.l2(1e-5))(x)
+    x = layers.LayerNormalization()(x)
+    x = layers.Dropout(0.3)(x)
+    x = layers.Dense(128, activation="relu")(x)
+    out = layers.Dense(classes, activation="softmax")(x)
+    return models.Model(inp, out)
 
-# ================== Model ==================
-inp = tf.keras.layers.Input(shape=(45, 1662))
-x = tf.keras.layers.Masking(mask_value=0.0)(inp)
-x = tf.keras.layers.LayerNormalization()(x)
-
-x = tf.keras.layers.Bidirectional(
-    tf.keras.layers.LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)
-)(x)
-x = tf.keras.layers.LayerNormalization()(x)
-
-x = tf.keras.layers.Bidirectional(
-    tf.keras.layers.LSTM(128, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)
-)(x)
-
-avg_pool = tf.keras.layers.GlobalAveragePooling1D()(x)
-max_pool = tf.keras.layers.GlobalMaxPooling1D()(x)
-x = tf.keras.layers.Concatenate()([avg_pool, max_pool])
-
-x = tf.keras.layers.Dropout(0.4)(x)
-x = tf.keras.layers.Dense(256, activation="relu", kernel_regularizer=regularizers.l2(1e-5))(x)
-x = tf.keras.layers.LayerNormalization()(x)
-x = tf.keras.layers.Dropout(0.3)(x)
-x = tf.keras.layers.Dense(128, activation="relu")(x)
-
-out = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
-model = tf.keras.Model(inp, out)
-
+model = build_model()
 model.load_weights(MODEL_WEIGHTS)
 
-mp_holistic = mp.solutions.holistic
-sequence = []
-sentence = []
+# Warm-up
+_ = model.predict(np.zeros((1, 30, 1662), dtype=np.float32), verbose=0)
 
-# -------- key change: ensure float32 ----------
+# ==================== MEDIAPIPE SETUP ====================
+mp_holistic = mp.solutions.holistic
+holistic = mp_holistic.Holistic(
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5,
+    model_complexity=0
+)
+
 def extract_keypoints(results):
-    pose = (np.array([[res.x, res.y, res.z, res.visibility] for res in results.pose_landmarks.landmark], dtype=np.float32).flatten()
-            if results.pose_landmarks else np.zeros(33*4, dtype=np.float32))
-    face = (np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark], dtype=np.float32).flatten()
-            if results.face_landmarks else np.zeros(468*3, dtype=np.float32))
-    lh = (np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark], dtype=np.float32).flatten()
-          if results.left_hand_landmarks else np.zeros(21*3, dtype=np.float32))
-    rh = (np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark], dtype=np.float32).flatten()
-          if results.right_hand_landmarks else np.zeros(21*3, dtype=np.float32))
+    pose = np.array([[r.x, r.y, r.z, r.visibility] for r in results.pose_landmarks.landmark]).flatten() if results.pose_landmarks else np.zeros(33*4)
+    face = np.array([[r.x, r.y, r.z] for r in results.face_landmarks.landmark]).flatten() if results.face_landmarks else np.zeros(468*3)
+    lh = np.array([[r.x, r.y, r.z] for r in results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21*3)
+    rh = np.array([[r.x, r.y, r.z] for r in results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21*3)
     return np.concatenate([pose, face, lh, rh]).astype(np.float32)
 
-def mediapipe_detection(image, model_):
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image.flags.writeable = False
-    results = model_.process(image)
-    image.flags.writeable = True
-    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-    return image, results
+def mediapipe_detection_bgr(frame):
+    # Downscale for faster processing
+    h, w = frame.shape[:2]
+    scale = 0.5
+    frame = cv2.resize(frame, (int(w*scale), int(h*scale)))
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    rgb.flags.writeable = False
+    results = holistic.process(rgb)
+    return results
 
-# -------- key changes: use 45-frame window ----------
-FRAMES_NEEDED = 45
 
+# ==================== INFERENCE WORKER ====================
+class InferenceWorker:
+    def __init__(self, interval_ms=300):
+        self.sequence = deque(maxlen=30)
+        self.latest_pred = {"word": "", "confidence": 0.0}
+        self.interval_ms = interval_ms
+        self.frame_queue = asyncio.Queue(maxsize=1)
+        self._stop = False
+
+    async def push_frame(self, frame_bgr):
+        if self.frame_queue.full():
+            try:
+                _ = self.frame_queue.get_nowait()
+                self.frame_queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+        await self.frame_queue.put(frame_bgr)
+
+    async def run(self):
+        last_run = 0
+        while not self._stop:
+            frame = await self.frame_queue.get()
+            now = time.time() * 1000
+            if now - last_run < self.interval_ms:
+                self.frame_queue.task_done()
+                continue
+            last_run = now
+
+            results = await asyncio.to_thread(mediapipe_detection_bgr, frame)
+            keypoints = extract_keypoints(results)
+            self.sequence.append(keypoints)
+
+            if len(self.sequence) == 30:
+                seq = np.expand_dims(np.asarray(self.sequence, dtype=np.float32), axis=0)
+                res = await asyncio.to_thread(model.predict, seq, 0)
+                res = res[0]
+                idx = int(np.argmax(res))
+                word, conf = actions[idx], float(res[idx])
+
+                if conf > threshold:
+                    self.latest_pred = {"word": word, "confidence": round(conf, 3)}
+                else:
+                    self.latest_pred = {"word": f"Low conf: {word}", "confidence": round(conf, 3)}
+
+            self.frame_queue.task_done()
+
+    def stop(self):
+        self._stop = True
+
+worker = InferenceWorker(interval_ms=100)
+
+# ==================== WEBSOCKET HANDLER ====================
 async def process_frame(websocket):
-    global sequence, sentence
-    holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    worker_task = asyncio.create_task(worker.run())
     try:
         async for message in websocket:
-            try:
-                data = json.loads(message)
-                img_b64 = data.get('frame', '')
-                if not img_b64:
-                    await websocket.send(json.dumps({'translation': ''}))
-                    continue
-                img_data = base64.b64decode(img_b64)
-                nparr = np.frombuffer(img_data, np.uint8)
-                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                if frame is None:
-                    await websocket.send(json.dumps({'translation': ''}))
-                    continue
-            except Exception:
-                # Malformed payload; keep the connection alive but send empty output
-                await websocket.send(json.dumps({'translation': ''}))
-                continue
+            data = json.loads(message)
+            img_data = base64.b64decode(data['frame'])
+            nparr = np.frombuffer(img_data, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-            _, results = mediapipe_detection(frame, holistic)
-            keypoints = extract_keypoints(results)
-            sequence.append(keypoints)
-            sequence = sequence[-FRAMES_NEEDED:]  # keep last 45
-
-            output = ""
-            if len(sequence) >= FRAMES_NEEDED:
-                try:
-                    window = np.expand_dims(sequence[-FRAMES_NEEDED:], axis=0)  # shape (1,45,1662)
-                    res = model.predict(window, verbose=0)[0]
-                    pred_idx = int(np.argmax(res))
-                    pred = actions[pred_idx]
-                    conf = float(res[pred_idx])
-                except Exception:
-                    # Any unexpected model error -> send empty to avoid breaking stream
-                    pred, conf = "", 0.0
-
-                if conf > threshold and pred:
-                    if len(sentence) == 0 or pred != sentence[-1]:
-                        sentence.append(pred)
-                        if len(sentence) > 5:
-                            sentence = sentence[-5:]
-                    output = " ".join(sentence)
-                else:
-                    # no confident update; keep output empty
-                    output = ""
-
-            await websocket.send(json.dumps({'translation': output}))
+            await worker.push_frame(frame)
+            await websocket.send(json.dumps(worker.latest_pred))
     finally:
-        holistic.close()
+        worker.stop()
+        await asyncio.gather(worker_task, return_exceptions=True)
 
+# ==================== MAIN ====================
 async def main():
-    # You can tweak ping/pong if clients are on flaky networks:
-    # async with websockets.serve(process_frame, "0.0.0.0", 8765, ping_interval=20, ping_timeout=20, max_size=8*1024*1024):
-    async with websockets.serve(process_frame, "0.0.0.0", 8765):
-        print("Sign language translation server started on ws://0.0.0.0:8765")
+    async with websockets.serve(process_frame, "localhost", 8765, max_size=4*1024*1024):
+        print("🟢 Sign language translation server running on ws://localhost:8765")
         await asyncio.Future()
 
 if __name__ == "__main__":
