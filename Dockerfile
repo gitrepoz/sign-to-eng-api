@@ -27,8 +27,7 @@ COPY server.py ./server.py
 COPY model/ ./model/
 
 # Default model path; you can override at runtime
-ENV MODEL_WEIGHTS=/app/model/updated15words.h5
-
+ENV MODEL_WEIGHTS=/app/model/model_30.h5
 EXPOSE 8765
 
 CMD ["python", "server.py"]
