@@ -136,7 +136,7 @@ async def process_frame(websocket):
 
 # ==================== MAIN ====================
 async def main():
-    async with websockets.serve(process_frame, "localhost", 8765, max_size=4*1024*1024):
+    async with websockets.serve(process_frame, host="0.0.0.0", 8765, max_size=4*1024*1024):
         print("🟢 Sign language translation server running on ws://localhost:8765")
         await asyncio.Future()
 
