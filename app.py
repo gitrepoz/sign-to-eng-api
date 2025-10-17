@@ -9,11 +9,14 @@ import mediapipe as mp
 from collections import deque
 import time
 from tensorflow.keras import layers, models, regularizers
+import os
 
 # ==================== MODEL & ACTION SETUP ====================
 actions = np.array(['beautiful', 'bye', 'call', 'love', 'hello'])
 num_classes = len(actions)
 threshold = 0.2
+
+MODEL_WEIGHTS = os.getenv("MODEL_WEIGHTS", "/app/model/model_30.h5")
 
 def build_model(timesteps=30, features=1662, classes=num_classes):
     inp = layers.Input(shape=(timesteps, features))
@@ -34,7 +37,7 @@ def build_model(timesteps=30, features=1662, classes=num_classes):
     return models.Model(inp, out)
 
 model = build_model()
-model.load_weights("model_30.h5")
+model.load_weights(MODEL_WEIGHTS)
 
 # Warm-up
 _ = model.predict(np.zeros((1, 30, 1662), dtype=np.float32), verbose=0)
