@@ -1,33 +1,30 @@
-# Dockerfile
+# ========= Base =========
 FROM python:3.10-slim
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
     TF_CPP_MIN_LOG_LEVEL=2
 
-# System libs needed by OpenCV/MediaPipe
+# ========= System Dependencies =========
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
-    libxrender1 \
+    libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# ========= App =========
 WORKDIR /app
 
-# Install Python deps first (better build cache)
 COPY requirements.txt .
-RUN python -m pip install --upgrade pip \
- && pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Copy app code and model
-COPY server.py ./server.py
-COPY model/ ./model/
+COPY app.py /app/app.py
+COPY model_30.h5 /app/model_30.h5
 
-# Default model path; you can override at runtime
-ENV MODEL_WEIGHTS=/app/model/model_30.h5
 EXPOSE 8765
 
-CMD ["python", "server.py"]
+CMD ["python", "-u", "app.py"]
