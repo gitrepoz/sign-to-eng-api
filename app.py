@@ -16,7 +16,7 @@ actions = np.array(['beautiful', 'bye', 'call', 'love', 'hello'])
 num_classes = len(actions)
 threshold = 0.2
 
-MODEL_WEIGHTS = os.getenv("MODEL_WEIGHTS", "/app/model/model_30.h5")
+MODEL_WEIGHTS = "/app/model/model_30.h5"
 
 def build_model(timesteps=30, features=1662, classes=num_classes):
     inp = layers.Input(shape=(timesteps, features))
