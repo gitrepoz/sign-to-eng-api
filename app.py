@@ -4,75 +4,36 @@ import cv2
 import numpy as np
 import base64
 import json
-import tensorflow as tf
-import mediapipe as mp
-from collections import deque
+import torch
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+from utils.boxes import rescale_bboxes
+from model import DETR
 import time
-from tensorflow.keras import layers, models, regularizers
 import os
 
-# ==================== MODEL & ACTION SETUP ====================
-actions = np.array(['beautiful', 'bye', 'call', 'love', 'hello'])
-num_classes = len(actions)
-threshold = 0.2
+# ==================== MODEL SETUP ====================
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-MODEL_WEIGHTS = "/app/model/model_30.h5"
+print(f"🔧 Loading DETR model on {DEVICE} ...")
+model = DETR(num_classes=3)
+model.eval()
+model.load_pretrained('/app/model/4426_model.pt')
+model.to(DEVICE)
 
-def build_model(timesteps=30, features=1662, classes=num_classes):
-    inp = layers.Input(shape=(timesteps, features))
-    x = layers.Masking(mask_value=0.0)(inp)
-    x = layers.LayerNormalization()(x)
-    x = layers.Bidirectional(layers.LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2))(x)
-    x = layers.LayerNormalization()(x)
-    x = layers.Bidirectional(layers.LSTM(128, return_sequences=True, dropout=0.2, recurrent_dropout=0.2))(x)
-    avg_pool = layers.GlobalAveragePooling1D()(x)
-    max_pool = layers.GlobalMaxPooling1D()(x)
-    x = layers.Concatenate()([avg_pool, max_pool])
-    x = layers.Dropout(0.4)(x)
-    x = layers.Dense(256, activation="relu", kernel_regularizer=regularizers.l2(1e-5))(x)
-    x = layers.LayerNormalization()(x)
-    x = layers.Dropout(0.3)(x)
-    x = layers.Dense(128, activation="relu")(x)
-    out = layers.Dense(classes, activation="softmax")(x)
-    return models.Model(inp, out)
+CLASSES = CLASSES = ['hello', 'iloveyou','thankyou',]
 
-model = build_model()
-model.load_weights(MODEL_WEIGHTS)
+# Albumentations transform
+transforms = A.Compose([
+    A.Resize(224, 224),
+    A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ToTensorV2()
+])
 
-# Warm-up
-_ = model.predict(np.zeros((1, 30, 1662), dtype=np.float32), verbose=0)
-
-# ==================== MEDIAPIPE SETUP ====================
-mp_holistic = mp.solutions.holistic
-holistic = mp_holistic.Holistic(
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5,
-    model_complexity=0
-)
-
-def extract_keypoints(results):
-    pose = np.array([[r.x, r.y, r.z, r.visibility] for r in results.pose_landmarks.landmark]).flatten() if results.pose_landmarks else np.zeros(33*4)
-    face = np.array([[r.x, r.y, r.z] for r in results.face_landmarks.landmark]).flatten() if results.face_landmarks else np.zeros(468*3)
-    lh = np.array([[r.x, r.y, r.z] for r in results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21*3)
-    rh = np.array([[r.x, r.y, r.z] for r in results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21*3)
-    return np.concatenate([pose, face, lh, rh]).astype(np.float32)
-
-def mediapipe_detection_bgr(frame):
-    # Downscale for faster processing
-    h, w = frame.shape[:2]
-    scale = 0.5
-    frame = cv2.resize(frame, (int(w*scale), int(h*scale)))
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    rgb.flags.writeable = False
-    results = holistic.process(rgb)
-    return results
-
-
-# ==================== INFERENCE WORKER ====================
+# ==================== DETECTION WORKER ====================
 class InferenceWorker:
-    def __init__(self, interval_ms=300):
-        self.sequence = deque(maxlen=30)
-        self.latest_pred = {"word": "", "confidence": 0.0}
+    def __init__(self, interval_ms=150):
+        self.latest_pred = []
         self.interval_ms = interval_ms
         self.frame_queue = asyncio.Queue(maxsize=1)
         self._stop = False
@@ -96,32 +57,52 @@ class InferenceWorker:
                 continue
             last_run = now
 
-            results = await asyncio.to_thread(mediapipe_detection_bgr, frame)
-            keypoints = extract_keypoints(results)
-            self.sequence.append(keypoints)
-
-            if len(self.sequence) == 30:
-                seq = np.expand_dims(np.asarray(self.sequence, dtype=np.float32), axis=0)
-                res = await asyncio.to_thread(model.predict, seq, 0)
-                res = res[0]
-                idx = int(np.argmax(res))
-                word, conf = actions[idx], float(res[idx])
-
-                if conf > threshold:
-                    self.latest_pred = {"word": word, "confidence": round(conf, 3)}
-                else:
-                    self.latest_pred = {"word": f"Low conf: {word}", "confidence": round(conf, 3)}
+            detections = await asyncio.to_thread(self.detect_objects, frame)
+            self.latest_pred = detections
+            print("Detections:", detections)
 
             self.frame_queue.task_done()
+
+    def detect_objects(self, frame):
+        transformed = transforms(image=frame)
+        img_tensor = transformed['image'].unsqueeze(0).to(DEVICE)
+
+        with torch.no_grad():
+            outputs = model(img_tensor)
+
+        probabilities = outputs['pred_logits'].softmax(-1)[..., :-1]
+        max_probs, max_classes = probabilities.max(-1)
+        keep_mask = max_probs > 0.3  # lower threshold for web demo
+
+        batch_indices, query_indices = torch.where(keep_mask)
+
+        h, w = frame.shape[:2]
+        boxes = rescale_bboxes(outputs['pred_boxes'][batch_indices, query_indices, :], (w, h))
+        classes = max_classes[batch_indices, query_indices]
+        probas = max_probs[batch_indices, query_indices]
+
+        detections = []
+        for bclass, bprob, bbox in zip(classes, probas, boxes):
+            bclass_idx = int(bclass.cpu().numpy())
+            bprob_val = float(bprob.cpu().numpy())
+            x1, y1, x2, y2 = bbox.cpu().numpy().tolist()
+            detections.append({
+                'class': CLASSES[bclass_idx],
+                'confidence': round(bprob_val, 3),
+                'bbox': [float(x1), float(y1), float(x2), float(y2)]
+            })
+        return detections
 
     def stop(self):
         self._stop = True
 
-worker = InferenceWorker(interval_ms=100)
+
+worker = InferenceWorker(interval_ms=150)
 
 # ==================== WEBSOCKET HANDLER ====================
 async def process_frame(websocket):
     worker_task = asyncio.create_task(worker.run())
+    print("⚡ Client connected!")
     try:
         async for message in websocket:
             data = json.loads(message)
@@ -129,17 +110,25 @@ async def process_frame(websocket):
             nparr = np.frombuffer(img_data, np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
+            if frame is None:
+                print("❌ Invalid frame received")
+                continue
+
+            print("✅ Frame received:", frame.shape)
             await worker.push_frame(frame)
+
             await websocket.send(json.dumps(worker.latest_pred))
+    except websockets.ConnectionClosed:
+        print("❌ Client disconnected.")
     finally:
         worker.stop()
         await asyncio.gather(worker_task, return_exceptions=True)
 
+
 # ==================== MAIN ====================
 async def main():
-    # Change "localhost" -> "0.0.0.0"
-    async with websockets.serve(process_frame, "0.0.0.0", 8765, max_size=4*1024*1024):
-        print("🟢 Sign language translation server running on ws://0.0.0.0:8765")
+    async with websockets.serve(process_frame, "0.0.0.0", 8765, max_size=8*1024*1024):
+        print("🟢 DETR object detection server running on ws://0.0.0.0:8765")
         await asyncio.Future()
 
 if __name__ == "__main__":

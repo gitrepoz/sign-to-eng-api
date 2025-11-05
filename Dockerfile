@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TF_CPP_MIN_LOG_LEVEL=2 \
-    MODEL_WEIGHTS=/app/model_30.h5
+    MODEL_WEIGHTS=/app/model/4426_model.pt
 
 # ========= System Dependencies =========
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,20 +16,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
-# ========= App =========
+# ========= Working Directory =========
 WORKDIR /app
 
-# Install Python dependencies first (better build cache)
+# ========= Python Dependencies =========
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copy app code and model
-COPY app.py ./app.py
-COPY model/ ./model/
+# ========= Copy Application Code =========
+COPY . /app
 
-ENV MODEL_WEIGHTS=/app/model/model_30.h5
+# Ensure Python can find all modules (like utils/)
+ENV PYTHONPATH=/app
 
+# ========= Expose Port & Run =========
 EXPOSE 8765
-
 CMD ["python", "app.py"]

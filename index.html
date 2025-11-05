@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DETR Model Output</title>
+  <style>
+    body {
+      background: #111;
+      color: #0f0;
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+    }
+    #videoElement {
+      border: 2px solid #333;
+      border-radius: 6px;
+      margin-bottom: 15px;
+    }
+    #status {
+      margin-top: 10px;
+      font-size: 18px;
+      color: #0af;
+    }
+    #message {
+      font-size: 48px;
+      font-weight: bold;
+      margin-top: 20px;
+      color: #0f0;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🟢 DETR Live Prediction</h1>
+
+  <video id="videoElement" autoplay playsinline width="640" height="480"></video>
+  <div id="status">Connecting to server...</div>
+  <div id="message">Waiting for prediction...</div>
+
+  <script>
+    const WS_URL = "ws://localhost:8765"; // Change if remote
+    const video = document.getElementById("videoElement");
+    const status = document.getElementById("status");
+    const message = document.getElementById("message");
+    let ws;
+
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        status.textContent = "📷 Camera started";
+      } catch (err) {
+        status.textContent = "⚠️ Cannot access webcam: " + err;
+      }
+    }
+
+    function connectWebSocket() {
+      ws = new WebSocket(WS_URL);
+
+      ws.onopen = () => {
+        status.textContent = "✅ Connected to server!";
+        sendFrames();
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const detections = JSON.parse(event.data);
+
+          if (detections.length > 0) {
+            // Sort by confidence
+            detections.sort((a, b) => b.confidence - a.confidence);
+            const top = detections[0];
+            message.textContent = top.class + " (" + (top.confidence * 100).toFixed(1) + "%)";
+          } else {
+            message.textContent = "No detection";
+          }
+
+        } catch (err) {
+          console.error("Error parsing message:", err);
+        }
+      };
+
+      ws.onclose = () => {
+        status.textContent = "❌ Disconnected. Reconnecting...";
+        setTimeout(connectWebSocket, 2000);
+      };
+
+      ws.onerror = (err) => {
+        console.error("WebSocket error:", err);
+        ws.close();
+      };
+    }
+
+    function sendFrames() {
+      const hiddenCanvas = document.createElement("canvas");
+      const ctx2 = hiddenCanvas.getContext("2d");
+      hiddenCanvas.width = 640;
+      hiddenCanvas.height = 480;
+
+      const sendInterval = 300; // ms
+      setInterval(() => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ctx2.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+        const dataURL = hiddenCanvas.toDataURL("image/jpeg", 0.6);
+        const base64data = dataURL.split(',')[1];
+        ws.send(JSON.stringify({ frame: base64data }));
+      }, sendInterval);
+    }
+
+    startCamera();
+    connectWebSocket();
+  </script>
+</body>
+</html>
