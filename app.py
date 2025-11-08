@@ -8,17 +8,19 @@ import torch
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from utils.boxes import rescale_bboxes
-from model import DETR
+from utils.model import DETR
 import time
 import os
 
 # ==================== MODEL SETUP ====================
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+MODEL_WEIGHTS="/app/model/4426_model.pt"
+
 print(f"🔧 Loading DETR model on {DEVICE} ...")
 model = DETR(num_classes=3)
 model.eval()
-model.load_pretrained('/app/model/4426_model.pt')
+model.load_pretrained(MODEL_WEIGHTS)
 model.to(DEVICE)
 
 CLASSES = CLASSES = ['hello', 'iloveyou','thankyou',]
