@@ -1,13 +1,17 @@
-# ========= Base =========
+# ===============================
+#        Base Image
+# ===============================
 FROM python:3.10-slim
 
+# Prevent interactive prompts & speed up Python
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TF_CPP_MIN_LOG_LEVEL=2 \
-    MODEL_WEIGHTS=/app/4426_model.pt
+    TF_CPP_MIN_LOG_LEVEL=2
 
-# ========= System Dependencies =========
+# ===============================
+#    System Dependencies
+# ===============================
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
@@ -16,21 +20,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
-# ========= App =========
+# ===============================
+#        Working Directory
+# ===============================
 WORKDIR /app
 
-# Install Python dependencies first (better build cache)
+# ===============================
+#   Install Python Dependencies
+# ===============================
 COPY requirements.txt .
-RUN python -m pip install --upgrade pip \
+RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copy app code and model
-COPY . /app
-COPY app.py ./app.py
-COPY model/ ./model/
+# ===============================
+#        Copy Application
+# ===============================
+# Copy everything including app.py, model/, etc.
+COPY . .
 
+# ===============================
+#     Environment Variables
+# ===============================
+# Make model path configurable
 ENV MODEL_WEIGHTS=/app/model/4426_model.pt
 
+# Optional: debug print
+RUN echo "Model path set to: $MODEL_WEIGHTS"
+
+# ===============================
+#          Expose Port
+# ===============================
 EXPOSE 8765
 
+# ===============================
+#          Entrypoint
+# ===============================
 CMD ["python", "app.py"]
