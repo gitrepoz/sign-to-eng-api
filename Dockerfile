@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TF_CPP_MIN_LOG_LEVEL=2 \
-    MODEL_WEIGHTS=/app/model_30.h5
+    MODEL_WEIGHTS=/app/4426_model.pt
 
 # ========= System Dependencies =========
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,7 +29,7 @@ COPY . /app
 COPY app.py ./app.py
 COPY model/ ./model/
 
-ENV MODEL_WEIGHTS=/app/model/model_30.h5
+ENV MODEL_WEIGHTS=/app/model/4426_model.pt
 
 EXPOSE 8765
 
