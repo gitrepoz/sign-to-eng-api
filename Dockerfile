@@ -26,8 +26,6 @@ RUN python -m pip install --upgrade pip \
 
 # Copy app code and model
 COPY . /app
-COPY app.py ./app.py
-COPY model/ ./model/
 
 ENV MODEL_WEIGHTS=/app/model/4426_model.pt
 

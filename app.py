@@ -135,7 +135,7 @@ def rescale_bboxes(out_bbox, size):
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_WEIGHTS = "/app/model/4426_model.pt"
 
-print(f"🔧 Loading DETR model on {DEVICE} ...")
+print(f"🔧 Loading DETR model on {DEVICE} from {MODEL_WEIGHTS}...")
 model = DETR(num_classes=3)
 model.eval()
 model.load_pretrained(MODEL_WEIGHTS, device=DEVICE)
