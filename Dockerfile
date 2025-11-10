@@ -32,16 +32,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-<<<<<<< HEAD
 # ===============================
 #        Copy Application
 # ===============================
 # Copy everything including app.py, model/, etc.
 COPY . .
-=======
-# Copy app code and model
-COPY . /app
->>>>>>> 1228975db138ab8cde19c30b4147b09203e70e7a
 
 # ===============================
 #     Environment Variables
