@@ -4,8 +4,7 @@ FROM python:3.10-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TF_CPP_MIN_LOG_LEVEL=2 \
-    MODEL_WEIGHTS=/app/model_30.h5
+    TF_CPP_MIN_LOG_LEVEL=2
 
 # ========= System Dependencies =========
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -26,10 +25,9 @@ RUN python -m pip install --upgrade pip \
 
 # Copy app code and model
 COPY . /app
-COPY app.py ./app.py
-COPY model/ ./model/
 
-ENV MODEL_WEIGHTS=/app/model/model_30.h5
+# Set the model path environment variable
+ENV MODEL_WEIGHTS=/app/model/4426_model.pt
 
 EXPOSE 8765
 
