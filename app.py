@@ -10,9 +10,22 @@ from albumentations.pytorch import ToTensorV2
 HOST = "0.0.0.0"                      
 PORT = 8765                             
 INTERVAL_MS = 150                    
-NUM_CLASSES = 3                        
-WEIGHTS_PATH = "/app/model/4426_model.pt"
-CLASS_NAMES = ['hello', 'iloveyou', 'thankyou']          
+NUM_CLASSES = 11                        
+WEIGHTS_PATH = "/app/model/999_demo_11_model.pt"
+CLASS_NAMES = [
+    "bye",
+    "drink",
+    "eat",
+    "evening",
+    "good",
+    "hello",
+    "I love you",
+    "love <3",
+    "morning",
+    "sorry",
+    "thankyou"
+  ]
+        
 CONF_THRESHOLD = 0.3                   
 IMAGE_SIZE = 224                        
 HIDDEN_DIM = 256                        
